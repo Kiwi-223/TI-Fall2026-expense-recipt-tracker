@@ -282,7 +282,7 @@ The last command should print the parsed receipt. Running it a second time shoul
 
 ## 9. Team workflow
 
-`main` is protected: every change goes through a pull request, needs **1 approval**, and can't be force-pushed or deleted.
+`main` is protected: every change goes through a pull request (no direct pushes), and `main` can't be force-pushed or deleted. A PR asks for **1 approval**, but anyone with Write access or higher can skip that and merge their own PR by ticking **"Merge without waiting for requirements to be met"**. Please still ask for a review when your change touches shared code: the schema, the `OcrProvider` interface or CI.
 
 1. **Pick an issue** (or open one) and assign yourself so nobody duplicates work.
 2. **Branch** off the latest `main`: `feat/<short-name>`, `fix/<short-name>` or `docs/<short-name>`.
@@ -290,7 +290,7 @@ The last command should print the parsed receipt. Running it a second time shoul
 4. **Before opening a PR:** run `make test` (and `make lint` once it exists).
 5. **Open the PR**, link the issue (`Closes #N`), and ask a teammate to review.
 6. **CI** (GitHub Actions) runs the test suite with `OCR_PROVIDER=mock`. It needs no secrets, so it works on PRs from forks too.
-7. After approval, **squash-merge** and delete the branch.
+7. Once it's approved (or you've chosen to bypass review), **squash-merge** and delete the branch.
 
 ---
 
