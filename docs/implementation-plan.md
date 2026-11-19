@@ -374,7 +374,7 @@ flowchart LR
 
 | # | Task | Depends on | Can run in parallel with | Owner |
 |---|---|---|---|---|
-| **M0** | Project skeleton: `pyproject.toml`, `Makefile` (install/test/lint/import), `.gitignore` (incl. `data/`, `*.db`, `.env`), `.env.example`, empty package, `ci.yml` running pytest. **Plus** a first `AGENTS.md` (setup/run/test), `CLAUDE.md`, a starter `.claude/settings.json` and an empty `AI_NOTES.md` (RQ0, RQ6, RQ7) | — | — | |
+| **M0** | Project skeleton: `pyproject.toml`, `Makefile` (install/test/lint/import), `.gitignore` (incl. `data/`, `*.db`, `.env`), `.env.example`, empty package, `ci.yml` running pytest. **Plus** a starter `.claude/settings.json` matching `AGENTS.md` "Agent boundaries", `make check-settings`, an empty `AI_NOTES.md`, and updating `AGENTS.md` to drop the M0 tags (RQ0, RQ6, RQ7) | — | — | |
 | **M1** | `models.py` (`ParsedReceipt`, `LineItem`), `failures.py` (`FailureKind`), `ocr/base.py` (`OcrProvider`, `OcrError`), `ocr/__init__.py` factory, `ocr/mock.py`, first fixture (`sample1.jpg` + `sample1.json`) + tests | M0 | — | |
 | **M2** | `db.py` migration runner, `0001_init.sql`, insert helpers, tests using a temp DB | M1 | M3, M4, M7 | |
 | **M3** | `ocr/azure.py` adapter using `azure-ai-documentintelligence` + `prebuilt-receipt`; mapping test against a recorded response, and every Azure error mapped to a `FailureKind` (no network in CI) | M1 | M2, M4, M7 | |
@@ -455,7 +455,8 @@ Nobody can help it once it starts. If it gets lost, ask what it was missing, the
 
 - `AGENTS.md` (with `CLAUDE.md` containing just `@AGENTS.md`) tells the next agent how to **set up, run, test, find the recorded data, and query it**. Write it for a reader with zero context.
 - It starts with a **"Debugging a symptom (start here)"** section: check `git status`/`git diff` for a planted change → `make test` → `make scenario` to reproduce → query records → write a failing test from a template.
-- **Milestones:** M0 (first draft), updated in every PR, finished in M10.
+- A starter [`AGENTS.md`](../AGENTS.md) and [`CLAUDE.md`](../CLAUDE.md) already exist. They describe the planned system, with each piece tagged by the milestone that builds it, so a cold agent can tell what exists yet.
+- **Milestones:** starter done; each milestone's PR updates it (removing that milestone's tags), and it's finished in M10.
 
 ### RQ1. Every command leaves a record you can query later
 
@@ -523,12 +524,12 @@ Enforced by a checked-in `.claude/settings.json` (and `.mcp.json`), with an **"A
 | Concern | Our answer |
 |---|---|
 | **Blast radius** | The worst cases: deleting or corrupting someone's local `ledger.db` (personal financial data), leaking `.env` keys or personal receipts, spending Azure quota, or pushing to `main`. |
-| **Permissions** | **Allow:** `make test/lint/records/scenario`, read-only `git` and `gh pr view/list/diff/create`, read-only MCP tools. **Ask:** `run_tests` via MCP, editing `.claude/**`, `.github/**`, `.mcp.json` or merged migrations, `git reset --hard`, `git clean`. **Deny:** reading `.env` or `receipts/**`, `rm -rf`, `git push --force`/`--delete`, pushing to `main`, `gh pr merge --admin`, `gh api` calls to rulesets/branch protection, `gh repo delete`. |
+| **Permissions** | **Allow:** `make test/lint/records/scenario`, read-only `git` and `gh pr view/list/diff/create`, read-only MCP tools. **Ask:** `run_tests` via MCP, `gh pr merge` (agents open PRs, humans merge), editing `.claude/**`, `.github/**`, `.mcp.json` or merged migrations, `git reset --hard`, `git clean`. **Deny:** reading `.env`, `receipts/**` or `ledger.db`, `rm -rf`, `git push --force`/`--delete`, pushing to `main`, `gh pr merge --admin`, `gh api` calls to rulesets/branch protection, `gh repo delete`. |
 | **Isolation** | Sandbox on, with a network allowlist (PyPI, GitHub). The Azure endpoint is **not** on it, so agents run with the mock and can't spend OCR quota. Work happens on a branch or git worktree, never on `main`. |
 | **Reversibility** | Everything lands through PRs (`main` is protected). `make reset-local` moves the ledger and `data/` aside with a timestamp and deletes nothing. The audit log records `before`/`after` for every ledger change. |
 | **Budget** | Headless runs go through a `make agent TASK=...` wrapper with turn, time and spend caps. The Azure F0 tier is free and throttles instead of billing. |
 
-No one runs with `--dangerously-skip-permissions`; a `make check-settings` target validates the settings file. **Milestones:** M0 (starter config), M9 (MCP tools), M10 (finished section).
+No one runs with `--dangerously-skip-permissions`; a `make check-settings` target validates the settings file. The full rule list is in `AGENTS.md` ["Agent boundaries"](../AGENTS.md#agent-boundaries), which `.claude/settings.json` must match. **Milestones:** M0 (starter config), M9 (MCP tools), M10 (finished section).
 
 ### RQ7. `AI_NOTES.md`: what the AI got wrong
 
