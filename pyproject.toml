@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "receipt-tracker"
+version = "0.1.0"
+description = "Import receipt photos and PDFs into a local expense ledger using OCR."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.12",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+receipts = "receipt_tracker.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/receipt_tracker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Code snippets in the docs are illustrations, not code to lint.
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+# E/F: pycodestyle + pyflakes, I: import sorting, UP: modern syntax, B: common bugs
+select = ["E", "F", "I", "UP", "B"]

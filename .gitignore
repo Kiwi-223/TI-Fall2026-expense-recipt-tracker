@@ -1,2 +1,15 @@
 # Personal receipts: never commit
 receipts/
+
+# Secrets and local data
+.env
+*.db
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
