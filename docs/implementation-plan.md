@@ -6,7 +6,97 @@ This is the starting plan for the first feature of the Expense & Receipt Tracker
 
 ---
 
-## 1. Goal and scope
+## 1. Planning steps
+
+Before writing code, the team works through five planning steps in order. Each step produces something concrete, and most of them are already drafted in this doc. Treat the drafts as proposals: discuss them in issues or on the PR, then tick the box once the team agrees.
+
+| Step | Question it answers | Output | Status |
+|---|---|---|---|
+| 1. Define the project scope | What are we building, and what are we *not* building? | [§2 Goal and scope](#2-goal-and-scope) | Drafted |
+| 2. Clarify requirements | What exactly must it do, and how well? | [§1.2](#12-clarify-requirements) requirement list | Drafted |
+| 3. Define the MVP | What is the smallest version that's useful end to end? | [§1.3](#13-define-the-mvp) MVP definition | Drafted |
+| 4. Choose a tech stack | Which language, database, libraries and services? | [§1.4](#14-choose-a-tech-stack) stack table | Drafted |
+| 5. Create an implementation plan | Who builds what, in what order? | This doc + GitHub issues for each milestone | In progress |
+
+### 1.1 Define the project scope
+
+- Write down the problem in one sentence: *turn receipt photos and PDFs into structured, de-duplicated rows in a local ledger.*
+- Name the users: people tracking their own expenses, and contributors practicing idempotency, migrations and API integration.
+- Agree on what's in and out of scope. The current proposal is in [§2](#2-goal-and-scope).
+
+- [ ] Team agrees on §2.
+
+### 1.2 Clarify requirements
+
+**Functional requirements**
+
+| ID | Requirement |
+|---|---|
+| FR1 | Import a receipt from a JPG, PNG or PDF file with `receipts import <file>`. |
+| FR2 | Extract merchant, date, total, subtotal, tax, currency and line items. Any of these may be missing. |
+| FR3 | Importing the same file again never creates a duplicate receipt. |
+| FR4 | If the OCR call fails, nothing is saved and the import can be retried. |
+| FR5 | List, show and edit receipts. Every import, edit and delete is recorded in an audit log. |
+| FR6 | Export receipts to CSV and JSON. |
+
+**Non-functional requirements**
+
+| ID | Requirement |
+|---|---|
+| NFR1 | Works fully offline with the mock provider. No API keys are needed to develop or run tests. |
+| NFR2 | All data stays on the user's machine in a local database file. |
+| NFR3 | Money is exact: `Decimal` in code, decimal strings in the database. |
+| NFR4 | No secrets or personal receipts are ever committed. |
+| NFR5 | Runs on Python 3.12+ on Windows, macOS and Linux. |
+
+Anything still undecided goes in [§12 Open questions](#12-open-questions).
+
+- [ ] Team agrees on the requirement list, and each requirement maps to at least one milestone in [§10](#10-milestones-and-work-breakdown).
+
+### 1.3 Define the MVP
+
+The MVP is the smallest version a new user could actually use: **import a receipt, see it in the ledger, fix it, and export it.**
+
+- **In the MVP:** milestones M0, M1, M2, M3, M5 and M6. That covers the mock and Azure providers, the SQLite ledger with dedup and audit log, `import`, `list`, `show`, `edit` and CSV/JSON export.
+- **Nice to have:** M4 (extra fixtures and the Tesseract adapter).
+- **After the MVP:** exchange-rate conversion, bank/transaction feed matching, and a desktop UI.
+
+**The MVP is done when** a new contributor can clone the repo, run `make test` offline, import a sample receipt, see it in `receipts list`, correct a field with `receipts edit`, and export the ledger to CSV. Re-importing the same file must be a no-op.
+
+- [ ] Team agrees on the MVP boundary.
+
+### 1.4 Choose a tech stack
+
+| Area | Choice | Why |
+|---|---|---|
+| Language | Python 3.12+ | Familiar to most contributors, good OCR SDKs, `sqlite3` built in |
+| Database | SQLite (stdlib `sqlite3`) | Zero setup, single file. DuckDB is still an [open question](#12-open-questions). |
+| OCR | Mock provider (default) + Azure AI Document Intelligence `prebuilt-receipt` | Mock keeps everyone unblocked; Azure has a free tier and a receipt-specific model |
+| Optional OCR | Tesseract via `pytesseract` | Free, fully local alternative (M4) |
+| CLI | Typer | Readable commands and auto-generated `--help` |
+| Config | `python-dotenv` + `.env` | Keeps keys out of code and git |
+| Testing | `pytest` | Standard and simple |
+| Lint/format | `ruff` | One fast tool for both |
+| Packaging | `pyproject.toml`, `pip install -e ".[dev]"` | Standard modern Python packaging |
+| CI | GitHub Actions | Free for this repo, runs on every PR |
+| Desktop UI | To be decided after the MVP | See [open questions](#12-open-questions) |
+
+- [ ] Team agrees on the stack. Any change gets recorded here.
+
+### 1.5 Create an implementation plan
+
+This document is the implementation plan. It covers the architecture ([§3](#3-how-an-import-works)), repo layout ([§4](#4-proposed-repo-layout)), interfaces ([§5](#5-the-ocr-provider-interface)), schema ([§7](#7-local-database-v1-schema)), workflow ([§9](#9-team-workflow)) and milestones ([§10](#10-milestones-and-work-breakdown)).
+
+To finish this step:
+
+- [ ] Merge this plan.
+- [ ] Open one GitHub issue per milestone task in §10, with labels and dependencies noted.
+- [ ] Open one issue per open question in §12.
+- [ ] Contributors claim M0 and M1 to get started.
+
+---
+
+## 2. Goal and scope
 
 **In scope (this plan):**
 
@@ -24,7 +114,7 @@ This is the starting plan for the first feature of the Expense & Receipt Tracker
 
 ---
 
-## 2. How an import works
+## 3. How an import works
 
 ```mermaid
 flowchart LR
@@ -45,7 +135,7 @@ Key ideas:
 
 ---
 
-## 3. Proposed repo layout
+## 4. Proposed repo layout
 
 ```
 .
@@ -80,7 +170,7 @@ Key ideas:
 
 ---
 
-## 4. The OCR provider interface
+## 5. The OCR provider interface
 
 Every OCR backend implements the same small interface, so the rest of the app never knows which one it's talking to.
 
@@ -125,7 +215,7 @@ class OcrProvider(Protocol):
 
 ---
 
-## 5. Config and secrets
+## 6. Config and secrets
 
 `.env.example` (committed):
 
@@ -146,7 +236,7 @@ Rules:
 
 ---
 
-## 6. Local database (v1 schema)
+## 7. Local database (v1 schema)
 
 Migrations are plain numbered SQL files in `src/receipt_tracker/migrations/`. `db.py` applies any that aren't yet recorded in `schema_migrations`, in order. **Never edit a migration that has been merged.** Add a new numbered file instead.
 
@@ -162,7 +252,7 @@ Money columns are stored as TEXT holding the exact decimal string (e.g. `"12.34"
 
 ---
 
-## 7. Contributor setup
+## 8. Contributor setup
 
 **Prerequisites:** Python 3.12+, git, and GitHub access to this repo.
 
@@ -190,7 +280,7 @@ The last command should print the parsed receipt. Running it a second time shoul
 
 ---
 
-## 8. Team workflow
+## 9. Team workflow
 
 `main` is protected: every change goes through a pull request, needs **1 approval**, and can't be force-pushed or deleted.
 
@@ -204,7 +294,7 @@ The last command should print the parsed receipt. Running it a second time shoul
 
 ---
 
-## 9. Milestones and work breakdown
+## 10. Milestones and work breakdown
 
 Each bullet below should become a GitHub issue. Owners are blank on purpose, so claim one!
 
@@ -233,7 +323,7 @@ flowchart LR
 
 ---
 
-## 10. Testing and definition of done
+## 11. Testing and definition of done
 
 A task is done when:
 
@@ -252,7 +342,7 @@ Must-have tests for the import feature:
 
 ---
 
-## 11. Open questions
+## 12. Open questions
 
 Decide these as a team. Open an issue for each one and link it here once it's decided.
 
