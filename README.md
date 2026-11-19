@@ -14,3 +14,7 @@ Idempotency keys and deduplication when re-importing transactions or retrying fa
 Currency conversion with historical exchange rates tied to transaction dates.
 
 Schema migrations, audit logs, and exportable reports (CSV/JSON) generated locally.
+
+## Getting started
+
+See the [implementation plan](docs/implementation-plan.md) for the architecture, contributor setup, and milestones you can pick up.
