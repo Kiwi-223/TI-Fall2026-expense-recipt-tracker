@@ -18,3 +18,5 @@ Schema migrations, audit logs, and exportable reports (CSV/JSON) generated local
 ## Getting started
 
 See the [implementation plan](docs/implementation-plan.md) for the architecture, contributor setup, and milestones you can pick up.
+
+Using an AI agent, or new to the repo? Read [AGENTS.md](AGENTS.md): setup, commands, where data lives, how to debug, and the agent's boundaries.

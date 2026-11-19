@@ -49,6 +49,21 @@ Before writing code, the team works through five planning steps in order. Each s
 | NFR4 | No secrets or personal receipts are ever committed. |
 | NFR5 | Runs on Python 3.12+ on Windows, macOS and Linux. |
 
+**Reliability and agent-readiness requirements**
+
+These come from the TI26 program's required outcomes, adapted to this project. They're judged by a **cold-agent test**: a fresh AI agent with no context gets a one-line bug report and must find the root cause using only what the repo provides. [§13](#13-agent-readiness-requirements-cold-agent-test) explains each one in detail.
+
+| ID | Requirement |
+|---|---|
+| RQ0 | It runs, and onboarding is written down in `AGENTS.md` for a reader with zero context. |
+| RQ1 | Every command (import, edit, delete, export) leaves a persisted, machine-readable record you can query later. |
+| RQ2 | Failures have names: every way the system can fail maps to one stable failure-kind id. |
+| RQ3 | The OCR API (and later the exchange-rate API) can fail **on demand, reproducibly**, and nothing gets corrupted when it does. |
+| RQ4 | An agent can ask the system questions through tools (an MCP server), without grepping raw files. |
+| RQ5 | One command (`make test`) proves it works, including the failure paths. |
+| RQ6 | The agent has boundaries enforced by checked-in configuration, not good intentions. |
+| RQ7 | `AI_NOTES.md` honestly logs where the AI was confidently wrong and how we caught it. |
+
 Anything still undecided goes in [§12 Open questions](#12-open-questions).
 
 - [ ] Team agrees on the requirement list, and each requirement maps to at least one milestone in [§10](#10-milestones-and-work-breakdown).
@@ -61,7 +76,9 @@ The MVP is the smallest version a new user could actually use: **import a receip
 - **Nice to have:** M4 (extra fixtures and the Tesseract adapter).
 - **After the MVP:** exchange-rate conversion, bank/transaction feed matching, and a desktop UI.
 
-**The MVP is done when** a new contributor can clone the repo, run `make test` offline, import a sample receipt, see it in `receipts list`, correct a field with `receipts edit`, and export the ledger to CSV. Re-importing the same file must be a no-op.
+- **Also in the MVP:** the "built-in from day one" parts of the agent-readiness requirements: `AGENTS.md`, failure kinds, request records and agent config (M0, M1, M7). They're cheap to add early and painful to retrofit. Fault injection, the MCP server and the cold-agent rehearsal (M8–M10) come right after.
+
+**The MVP is done when** a new contributor can clone the repo, run `make test` offline, import a sample receipt, see it in `receipts list`, correct a field with `receipts edit`, and export the ledger to CSV. Re-importing the same file must be a no-op, and `make records ARGS="recent"` must show a record for each of those commands.
 
 - [ ] Team agrees on the MVP boundary.
 
@@ -79,6 +96,9 @@ The MVP is the smallest version a new user could actually use: **import a receip
 | Lint/format | `ruff` | One fast tool for both |
 | Packaging | `pyproject.toml`, `pip install -e ".[dev]"` | Standard modern Python packaging |
 | CI | GitHub Actions | Free for this repo, runs on every PR |
+| Request records | Append-only JSON Lines file (`data/records.jsonl`) | Survives restarts and DB failures, easy to query with the `records` CLI and MCP tools |
+| Agent tools | MCP server using the official `mcp` Python SDK | Lets agents query records and run tests through tools ([RQ4](#rq4-an-agent-can-ask-the-system-questions)) |
+| Agent config | Claude Code `.claude/settings.json` + `.mcp.json`, checked in | Permissions and sandbox enforced by config ([RQ6](#rq6-the-agent-has-boundaries)) |
 | Desktop UI | To be decided after the MVP | See [open questions](#12-open-questions) |
 
 - [ ] Team agrees on the stack. Any change gets recorded here.
@@ -105,6 +125,7 @@ To finish this step:
 - A **mock provider** that works offline with no API keys. It is the default, so everyone can develop and run tests.
 - One **real provider**: Azure AI Document Intelligence (`prebuilt-receipt` model).
 - A local **SQLite** ledger with migrations, deduplication and an audit log.
+- **Debuggability for agents:** request records, named failure kinds, reproducible OCR faults, an MCP server and checked-in agent permissions ([§13](#13-agent-readiness-requirements-cold-agent-test)).
 
 **Out of scope for now (later milestones):**
 
@@ -122,8 +143,10 @@ flowchart LR
     B --> C{sha256 already in documents?}
     C -- yes --> D[Skip: print 'already imported' and exit 0]
     C -- no --> E[OcrProvider.parse file]
+    E -- OcrError kind --> X[Fail with a failure kind:<br/>nothing written to the ledger]
     E --> F[ParsedReceipt]
     F --> G[(One SQLite transaction:<br/>documents + receipts + line_items + audit_log)]
+    D & X & G --> R[[Append one request record<br/>to data/records.jsonl]]
 ```
 
 Key ideas:
@@ -132,6 +155,8 @@ Key ideas:
 - **The OCR call happens before anything is written.** If the API call fails or times out, nothing is saved, so you can simply run the command again.
 - **All writes for one receipt happen in a single transaction.** You never end up with a half-imported receipt.
 - **Every change is logged** to `audit_log`: imports, manual corrections and deletions.
+- **The `documents` row is written only in the success transaction.** A failed import leaves no trace in the ledger, so a retry isn't wrongly skipped as "already imported".
+- **Every command ends by appending one request record**, whether it succeeded, was skipped or failed ([RQ1](#rq1-every-command-leaves-a-record-you-can-query-later)). Failures carry a stable failure kind ([RQ2](#rq2-failures-have-names)).
 
 ---
 
@@ -140,22 +165,36 @@ Key ideas:
 ```
 .
 ├── README.md
+├── AGENTS.md                 # onboarding for humans + agents with zero context (RQ0)
+├── CLAUDE.md                 # one line: @AGENTS.md (so Claude Code loads it)
+├── AI_NOTES.md               # where the AI was confidently wrong (RQ7)
 ├── pyproject.toml            # package metadata + dependencies
-├── Makefile                  # make install / test / lint / import
+├── Makefile                  # make install / test / lint / import / records / scenario / reset-local
 ├── .env.example              # copy to .env, never commit .env
+├── .mcp.json                 # registers the MCP server for agents (RQ4)
+├── .claude/settings.json     # agent permissions + sandbox (RQ6)
 ├── .github/workflows/ci.yml  # runs tests on every PR (mock provider only)
+├── data/                     # gitignored: records.jsonl, scenario runs
 ├── docs/
 │   └── implementation-plan.md
+├── scripts/
+│   ├── scenarios.py          # `make scenario NAME=...`: realistic runs on an isolated ledger (RQ3)
+│   └── reset_local.py        # backs up and resets local state, deletes nothing (RQ6)
 ├── src/receipt_tracker/
-│   ├── cli.py                # `receipts` command (import, list, show, export)
+│   ├── cli.py                # `receipts` command (import, list, show, edit, export)
 │   ├── models.py             # ParsedReceipt, LineItem dataclasses
+│   ├── failures.py           # FailureKind enum: the fixed set of failure ids (RQ2)
+│   ├── records.py            # writes one request record per command (RQ1)
+│   ├── records_query.py      # `make records ARGS=...` CLI over the records (RQ1)
+│   ├── invariants.py         # ledger consistency checks (RQ3)
+│   ├── mcp_server.py         # agent tools over records, ledger and tests (RQ4)
 │   ├── db.py                 # connection, migration runner, insert helpers
 │   ├── migrations/
 │   │   └── 0001_init.sql
 │   └── ocr/
 │       ├── __init__.py       # get_provider() factory, reads OCR_PROVIDER
-│       ├── base.py           # OcrProvider protocol
-│       ├── mock.py           # reads tests/fixtures JSON, no network
+│       ├── base.py           # OcrProvider protocol + OcrError(kind)
+│       ├── mock.py           # reads tests/fixtures JSON, no network, injects faults (OCR_FAULT)
 │       └── azure.py          # Azure Document Intelligence adapter
 └── tests/
     ├── fixtures/receipts/
@@ -165,7 +204,10 @@ Key ideas:
     ├── test_mock_provider.py
     ├── test_azure_adapter.py
     ├── test_db.py
-    └── test_import.py
+    ├── test_import.py
+    ├── test_failure_kinds.py # every FailureKind is triggered by a real command
+    ├── test_faults.py        # every OCR fault leaves the ledger consistent
+    └── test_records.py
 ```
 
 ---
@@ -205,6 +247,7 @@ class OcrProvider(Protocol):
 - Use `Decimal` for money, never `float`.
 - Any field can be `None` because OCR isn't perfect. The user fixes gaps later (milestone M6).
 - `get_provider()` in `ocr/__init__.py` returns the provider named by the `OCR_PROVIDER` env var (`mock` by default).
+- A provider that fails raises `OcrError(kind)`, where `kind` is a `FailureKind` such as `ocr_timeout` or `ocr_auth_failed` ([RQ2](#rq2-failures-have-names)). Adapters must translate SDK/HTTP errors into these kinds and never let a raw SDK exception escape.
 
 **Adding a new provider** (Tesseract, Google Document AI, AWS Textract, Mindee, ...):
 
@@ -212,6 +255,7 @@ class OcrProvider(Protocol):
 2. Map that provider's response into `ParsedReceipt`.
 3. Register it in `get_provider()`.
 4. Save one real response as `tests/fixtures/receipts/<name>_*_response.json` and write a test that maps it **without calling the network**.
+5. Map each of its error responses to a `FailureKind`, and add a test for each mapping.
 
 ---
 
@@ -222,6 +266,11 @@ class OcrProvider(Protocol):
 ```
 OCR_PROVIDER=mock            # mock | azure
 LEDGER_PATH=./ledger.db
+RECORDS_PATH=./data/records.jsonl
+
+# Mock-provider fault injection (RQ3). Leave empty for normal runs.
+OCR_FAULT=                   # timeout | auth_failed | rate_limited | unavailable | bad_response | low_confidence | random
+OCR_FAULT_SEED=              # with OCR_FAULT=random: same seed -> same sequence of faults
 
 # Only needed if OCR_PROVIDER=azure
 AZURE_DOCINTEL_ENDPOINT=
@@ -246,7 +295,9 @@ Migrations are plain numbered SQL files in `src/receipt_tracker/migrations/`. `d
 | `documents` | One row per imported file | `id`, `sha256` **UNIQUE**, `filename`, `imported_at` |
 | `receipts` | Parsed receipt header | `id`, `document_id` → documents, `merchant`, `transaction_date`, `total`, `subtotal`, `tax`, `currency`, `provider`, `confidence`, `raw_json` |
 | `line_items` | Items on a receipt | `id`, `receipt_id` → receipts, `description`, `quantity`, `unit_price`, `amount` |
-| `audit_log` | Every change | `id`, `entity`, `entity_id`, `action` (import/update/delete), `before_json`, `after_json`, `at` |
+| `audit_log` | Every change | `id`, `request_id` (links to the request record), `entity`, `entity_id`, `action` (import/update/delete), `before_json`, `after_json`, `at` |
+
+Request records live in `data/records.jsonl`, not in the ledger, so they still get written when the ledger itself is the thing failing. The `request_id` column joins the two.
 
 Money columns are stored as TEXT holding the exact decimal string (e.g. `"12.34"`) to avoid floating-point drift.
 
@@ -267,9 +318,16 @@ make test                          # all tests should pass offline
 make import FILE=tests/fixtures/receipts/sample1.jpg
 ```
 
-The last command should print the parsed receipt. Running it a second time should say the file was already imported.
+The last command should print the parsed receipt. Running it a second time should say the file was already imported. To see what the system recorded about both runs:
 
-> `make install`, `make test` and `make import` will exist once milestone **M0** is merged. Until then, start by picking up M0.
+```bash
+make records ARGS="recent"         # one line per command: outcome, failure kind, receipt id
+make scenario NAME=all             # optional: replay every fault scenario on an isolated ledger
+```
+
+**Using an AI agent?** Claude Code picks up `CLAUDE.md`, `.claude/settings.json` and `.mcp.json` automatically. Don't run it with `--dangerously-skip-permissions`; the checked-in config is the boundary ([RQ6](#rq6-the-agent-has-boundaries)).
+
+> `make install`, `make test` and `make import` will exist once milestone **M0** is merged; `make records` once **M7** is, and `make scenario` once **M8** is. Until then, start by picking up M0.
 
 ### Optional: try the real Azure provider
 
@@ -304,22 +362,33 @@ flowchart LR
     M1 --> M2[M2 DB schema + migrations]
     M1 --> M3[M3 Azure adapter]
     M1 --> M4[M4 Fixtures + Tesseract adapter]
+    M1 --> M7[M7 Request records + records CLI]
     M2 --> M5[M5 import command + dedup + audit]
+    M7 --> M5
     M5 --> M6[M6 Review/correct + CSV/JSON export]
+    M5 --> M8[M8 Fault injection + scenarios + invariants]
+    M5 --> M9[M9 MCP server]
+    M7 --> M9
+    M6 & M8 & M9 --> M10[M10 Cold-agent rehearsal]
 ```
 
 | # | Task | Depends on | Can run in parallel with | Owner |
 |---|---|---|---|---|
-| **M0** | Project skeleton: `pyproject.toml`, `Makefile` (install/test/lint/import), `.gitignore`, `.env.example`, empty package, `ci.yml` running pytest | — | — | |
-| **M1** | `models.py` (`ParsedReceipt`, `LineItem`), `ocr/base.py`, `ocr/__init__.py` factory, `ocr/mock.py`, first fixture (`sample1.jpg` + `sample1.json`) + tests | M0 | — | |
-| **M2** | `db.py` migration runner, `0001_init.sql`, insert helpers, tests using a temp DB | M1 | M3, M4 | |
-| **M3** | `ocr/azure.py` adapter using `azure-ai-documentintelligence` + `prebuilt-receipt`; mapping test against a recorded response (no network in CI) | M1 | M2, M4 | |
-| **M4** | 3–5 more varied fixtures (different stores, currencies, a PDF), plus an optional `ocr/tesseract.py` adapter | M1 | M2, M3 | |
-| **M5** | `receipts import` CLI: hash → dedup → parse → one transaction → audit log. Tests: re-import is a no-op, an OCR failure writes nothing | M1, M2 | M3, M4 | |
-| **M6** | `receipts list/show/edit` (edits write to `audit_log`) and `receipts export --format csv\|json` | M5 | — | |
-| Later | Exchange-rate API (historical rate by `transaction_date`), bank/transaction feed matching, desktop UI | M5+ | — | |
+| **M0** | Project skeleton: `pyproject.toml`, `Makefile` (install/test/lint/import), `.gitignore` (incl. `data/`, `*.db`, `.env`), `.env.example`, empty package, `ci.yml` running pytest. **Plus** a starter `.claude/settings.json` matching `AGENTS.md` "Agent boundaries", `make check-settings`, an empty `AI_NOTES.md`, and updating `AGENTS.md` to drop the M0 tags (RQ0, RQ6, RQ7) | — | — | |
+| **M1** | `models.py` (`ParsedReceipt`, `LineItem`), `failures.py` (`FailureKind`), `ocr/base.py` (`OcrProvider`, `OcrError`), `ocr/__init__.py` factory, `ocr/mock.py`, first fixture (`sample1.jpg` + `sample1.json`) + tests | M0 | — | |
+| **M2** | `db.py` migration runner, `0001_init.sql`, insert helpers, tests using a temp DB | M1 | M3, M4, M7 | |
+| **M3** | `ocr/azure.py` adapter using `azure-ai-documentintelligence` + `prebuilt-receipt`; mapping test against a recorded response, and every Azure error mapped to a `FailureKind` (no network in CI) | M1 | M2, M4, M7 | |
+| **M4** | 3–5 more varied fixtures (different stores, currencies, a PDF), plus an optional `ocr/tesseract.py` adapter | M1 | M2, M3, M7 | |
+| **M7** | `records.py` (one record per command, see [RQ1](#rq1-every-command-leaves-a-record-you-can-query-later)) and `records_query.py` + `make records` (`recent`, `recent-failures`, `failure-counts --since 1h`, `request <id>`, `receipt <id>`, `file <sha256>`) | M1 | M2, M3, M4 | |
+| **M5** | `receipts import` CLI: hash → dedup → parse → one transaction → audit log → request record. Tests: re-import is a no-op, an OCR failure writes nothing to the ledger but does write a record with its failure kind | M1, M2, M7 | M3, M4 | |
+| **M6** | `receipts list/show/edit/delete` (each writes `audit_log` + a request record) and `receipts export --format csv\|json` | M5 | M8, M9 | |
+| **M8** | Fault injection in the mock (`OCR_FAULT`, `OCR_FAULT_SEED`, plus a "crash before commit" fault), `invariants.py`, `make scenario NAME=...`, `make reset-local`, and `tests/test_faults.py` proving every fault leaves the ledger consistent ([RQ3](#rq3-the-ocr-api-can-fail-and-nothing-gets-corrupted)) | M5 | M6, M9 | |
+| **M9** | `mcp_server.py` + `.mcp.json`: read-only query tools plus `run_tests` ([RQ4](#rq4-an-agent-can-ask-the-system-questions)); add the tools to `.claude/settings.json` | M5, M7 | M6, M8 | |
+| **M10** | Cold-agent rehearsal: someone plants a bug, a fresh agent session gets only a symptom, and we fix whatever it was missing. Finish `AGENTS.md` "Debugging a symptom" and the "Agent boundaries" section | M6, M8, M9 | — | |
+| Ongoing | Add an `AI_NOTES.md` entry in the PR where an AI mistake is caught (RQ7). Update `AGENTS.md` in any PR that changes setup, commands, layout or data locations (RQ0) | — | everything | everyone |
+| Later | Exchange-rate API (historical rate by `transaction_date`, with its own failure kinds and faults), bank/transaction feed matching, desktop UI | M5+ | — | |
 
-**Parallelism in practice:** M0 → M1 should be done by one or two people quickly, since they unblock everything else. After M1 merges, up to three people can work on M2, M3 and M4 at the same time because they touch different files.
+**Parallelism in practice:** M0 → M1 should be done by one or two people quickly, since they unblock everything else. After M1 merges, up to four people can work on M2, M3, M4 and M7 at the same time because they touch different files. After M5, M6, M8 and M9 can also run in parallel.
 
 ---
 
@@ -332,11 +401,19 @@ A task is done when:
 - [ ] Money uses `Decimal`, and dates are ISO `YYYY-MM-DD`.
 - [ ] No secrets, personal receipts or `.db` files are committed.
 - [ ] The README or this doc is updated if setup steps changed.
+- [ ] `AGENTS.md` is updated if setup, commands, layout or data locations changed.
+- [ ] Any new way to fail has a `FailureKind` and a test that triggers it through a real command.
+- [ ] Any new command writes a request record.
 
 Must-have tests for the import feature:
 
 - Importing the same file twice → exactly one `documents` row and one `receipts` row.
-- The OCR provider raises an error → zero new rows, and the command exits non-zero with a clear message.
+- The OCR provider raises an error → zero new rows, and the command exits non-zero with a clear message **and its failure kind**.
+- After a failed import, re-running the same file without the fault imports it normally (not "already imported").
+- Every `OCR_FAULT` value, and a crash just before commit → the invariants in [RQ3](#rq3-the-ocr-api-can-fail-and-nothing-gets-corrupted) still hold.
+- The same `OCR_FAULT_SEED` produces the same sequence of faults.
+- Every command writes exactly one request record, and the records are still there after the process restarts.
+- Every `FailureKind` is triggered by at least one test (the test fails if a kind is never triggered).
 - The Azure mapping turns a recorded response into the expected `ParsedReceipt`.
 - Migrations run on a fresh DB and are a no-op when run again.
 
@@ -350,3 +427,110 @@ Decide these as a team. Open an issue for each one and link it here once it's de
 2. **Desktop UI toolkit:** Textual (terminal UI), Tkinter, or a small local web UI?
 3. **Storing receipt images:** copy each file into an app folder, or store only its path and hash?
 4. **Low-confidence handling:** should receipts below a confidence threshold be flagged "needs review" automatically?
+5. **Which agent tool:** this plan assumes Claude Code for the checked-in config (RQ6). If contributors use other agents (Cursor, Copilot, Codex), do we add their config too, or document Claude Code as the supported one?
+6. **Records retention:** keep `data/records.jsonl` forever, or rotate it (e.g. monthly files)?
+
+---
+
+## 13. Agent-readiness requirements (cold-agent test)
+
+These adapt the TI26 required outcomes to this project. Where the original brief talks about scooters and payments, this project's equivalents are **receipts and imports** and the **OCR API** (later also the exchange-rate API).
+
+### The acceptance test: the cold agent
+
+1. Someone plants a bug in the repo that the rest of the team hasn't seen.
+2. A **fresh** agent session starts in the repo, with no chat history and no hints. It gets only a one-sentence symptom, the kind a user would file. For example:
+   - *"I imported the same receipt twice and now it shows up twice in my list."*
+   - *"My grocery receipt was $12.34 but the ledger says $1,234.00."*
+   - *"The import timed out, and now when I retry it says 'already imported' but the receipt isn't in my list."*
+3. The agent can use anything the repo provides: docs, scripts, tests, MCP tools and the recorded data.
+4. It passes if, within the time limit, it:
+   - names the root cause,
+   - backs that up with **evidence from what the system recorded** (request records, audit log, ledger state), not just a guess from reading code, and
+   - writes a failing test that reproduces the bug.
+
+Nobody can help it once it starts. If it gets lost, ask what it was missing, then add that to `AGENTS.md`, a tool or a record.
+
+### RQ0. It runs, and onboarding is written down
+
+- `AGENTS.md` (with `CLAUDE.md` containing just `@AGENTS.md`) tells the next agent how to **set up, run, test, find the recorded data, and query it**. Write it for a reader with zero context.
+- It starts with a **"Debugging a symptom (start here)"** section: check `git status`/`git diff` for a planted change → `make test` → `make scenario` to reproduce → query records → write a failing test from a template.
+- A starter [`AGENTS.md`](../AGENTS.md) and [`CLAUDE.md`](../CLAUDE.md) already exist. They describe the planned system, with each piece tagged by the milestone that builds it, so a cold agent can tell what exists yet.
+- **Milestones:** starter done; each milestone's PR updates it (removing that milestone's tags), and it's finished in M10.
+
+### RQ1. Every command leaves a record you can query later
+
+One JSON line per command in `data/records.jsonl` (append-only, so it survives restarts):
+
+| Field | Example |
+|---|---|
+| `request_id` | `7f3c…` (or `scn-faults-003` in scenarios) |
+| `command`, `args` | `import`, `{"file": "receipts/costco.jpg"}` |
+| `started_at`, `ended_at` | ISO timestamps |
+| `git_sha`, `git_dirty_paths` | which code ran (helps spot a planted change) |
+| `file` | `{"path": …, "sha256": …, "size": …}` |
+| `provider`, `fault` | `mock`, `timeout` (the fault that was injected, if any) |
+| `decisions` | ordered steps: `hash ok`, `dedup new`, `ocr failed(ocr_timeout)`, `db_write rolled_back`, … |
+| `receipt_before`, `receipt_after` | snapshots for edits and deletes |
+| `outcome` | `imported` \| `skipped_duplicate` \| `updated` \| `deleted` \| `exported` \| `failed` |
+| `failure_kind` | stable id from RQ2, or `null` |
+| `receipt_id`, `document_id` | to follow one receipt end-to-end |
+
+You can follow **one request** (`make records ARGS="request <id>"`), **one receipt** (`receipt <id>`) or **one file** (`file <sha256>`) end-to-end. `audit_log.request_id` links ledger changes back to the record that made them. **Milestone:** M7.
+
+### RQ2. Failures have names
+
+- `failures.py` defines `FailureKind`, a fixed set of stable ids. Examples: `file_not_found`, `unsupported_file_type`, `file_unreadable`, `ocr_not_configured`, `ocr_auth_failed`, `ocr_timeout`, `ocr_rate_limited`, `ocr_unavailable`, `ocr_bad_response`, `receipt_unparseable`, `validation_failed`, `receipt_not_found`, `db_error`, `migration_failed`, `export_failed`. Later: `fx_rate_unavailable`, `fx_timeout`.
+- Every failed command prints its kind (and `--json` output carries `{"error": {"kind": …, "message": …}}`), exits non-zero, and writes it to the record's `failure_kind`.
+- Once an id has shipped, it is never renamed or reused for a different meaning. A new failure mode gets a new id plus a test that triggers it.
+- `make records ARGS="failure-counts --since 1h"` answers "how many of each kind in the last hour?" without parsing English. **Milestones:** M1 (enum), M5/M7 (wired in).
+
+### RQ3. The OCR API can fail, and nothing gets corrupted
+
+In the original brief this was payment. Here the external dependency is the OCR API (and later the exchange-rate API).
+
+- **Failure on demand, reproducibly:** the mock provider reads `OCR_FAULT` (`timeout`, `auth_failed`, `rate_limited`, `unavailable`, `bad_response`, `low_confidence`) or `OCR_FAULT=random` with `OCR_FAULT_SEED`, which gives the same faults for the same seed. A fixture's JSON can also pin a fault to one file. A test-only `IMPORT_FAULT=crash_before_commit` simulates the process dying mid-import.
+- **Invariants** (`invariants.py`, run by tests, `make scenario` and the MCP `check_invariants` tool):
+  - every `receipts` row has exactly one `documents` row, and the other way round;
+  - no `documents` row exists for a file whose last import failed, so a retry is never wrongly skipped;
+  - every ledger change has an `audit_log` row whose `request_id` matches a record;
+  - money columns parse as exact decimals; line items never reference a missing receipt.
+- **Prove it:** `tests/test_faults.py` runs every fault and checks the invariants, and a seeded "fault soak" test runs many random imports. `make scenario NAME=faults` replays them on an isolated ledger in `data/scenarios/<name>/`, so the live ledger is never touched. **Milestone:** M8.
+
+### RQ4. An agent can ask the system questions
+
+`mcp_server.py`, registered in `.mcp.json`. It's a thin layer over the same functions the `records` CLI uses:
+
+| Tool | Answers | Writes? |
+|---|---|---|
+| `recent_failures(since)` | What failed recently? | no |
+| `failure_counts(since)` | How many of each kind? | no |
+| `request_trace(request_id)` | Everything one command decided | no |
+| `receipt_history(receipt_id \| sha256)` | What happened to this receipt or file? | no |
+| `receipt_state(receipt_id)` | What's in the ledger now? | no |
+| `check_invariants(scenario?)` | Is the ledger consistent? | no |
+| `run_tests(args?)` | Run the test suite | runs pytest (asks first) |
+
+Every read-only tool takes an optional `scenario` to read a `make scenario` run instead of the live data. The CLI (`make records ARGS=...`) stays as the fallback. **Milestone:** M9.
+
+### RQ5. One command proves it works
+
+`make test` runs the whole suite offline with the mock provider, and covers the failure paths, not just the happy path (see the must-have tests in [§11](#11-testing-and-definition-of-done)). CI runs the same command. **Milestones:** M0, then every PR.
+
+### RQ6. The agent has boundaries
+
+Enforced by a checked-in `.claude/settings.json` (and `.mcp.json`), with an **"Agent boundaries"** section in `AGENTS.md` explaining each choice:
+
+| Concern | Our answer |
+|---|---|
+| **Blast radius** | The worst cases: deleting or corrupting someone's local `ledger.db` (personal financial data), leaking `.env` keys or personal receipts, spending Azure quota, or pushing to `main`. |
+| **Permissions** | **Allow:** `make test/lint/records/scenario`, read-only `git` and `gh pr view/list/diff/create`, read-only MCP tools. **Ask:** `run_tests` via MCP, `gh pr merge` (agents open PRs, humans merge), editing `.claude/**`, `.github/**`, `.mcp.json` or merged migrations, `git reset --hard`, `git clean`. **Deny:** reading `.env`, `receipts/**` or `ledger.db`, `rm -rf`, `git push --force`/`--delete`, pushing to `main`, `gh pr merge --admin`, `gh api` calls to rulesets/branch protection, `gh repo delete`. |
+| **Isolation** | Sandbox on, with a network allowlist (PyPI, GitHub). The Azure endpoint is **not** on it, so agents run with the mock and can't spend OCR quota. Work happens on a branch or git worktree, never on `main`. |
+| **Reversibility** | Everything lands through PRs (`main` is protected). `make reset-local` moves the ledger and `data/` aside with a timestamp and deletes nothing. The audit log records `before`/`after` for every ledger change. |
+| **Budget** | Headless runs go through a `make agent TASK=...` wrapper with turn, time and spend caps. The Azure F0 tier is free and throttles instead of billing. |
+
+No one runs with `--dangerously-skip-permissions`; a `make check-settings` target validates the settings file. The full rule list is in `AGENTS.md` ["Agent boundaries"](../AGENTS.md#agent-boundaries), which `.claude/settings.json` must match. **Milestones:** M0 (starter config), M9 (MCP tools), M10 (finished section).
+
+### RQ7. `AI_NOTES.md`: what the AI got wrong
+
+A short, honest log of where an agent was **confidently wrong** and how we caught it (a test, a record, a review, a gut feeling). Each entry has: who/what was wrong, the confident claim, how it was caught (link the PR or test), what changed, and the lesson. Three good entries beat ten vague ones. Add an entry in the PR where the mistake is caught. **Milestone:** ongoing.
